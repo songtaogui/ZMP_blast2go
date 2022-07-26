@@ -1,0 +1,337 @@
+#!/usr/bin/env bash
+# Songtao Gui 2021/12/15
+
+
+# >>>>>>>>>>>>>>>>>>>>>>>> Common functions >>>>>>>>>>>>>>>>>>>>>>>>
+
+gst_log () {
+    local info=$1
+    if [[ "$quiet" != "TRUE" ]];then
+        echo -e "\033[36m[$(date +'%y-%m-%d %H:%M')]\033[0m $info" >&2
+    fi
+}
+
+gst_rcd () {
+    local info=$1
+    if [[ "$verbose" == "TRUE" ]];then
+        echo -e "\033[32m>>>------------>\033[0m $info" >&2
+    fi
+}
+
+gst_err () {
+    local info=$1
+    echo -e "\033[31m\033[7m[ERROR]\033[0m --> $info" >&2
+}
+
+gst_warn () {
+    local info=$1
+    if [[ "$quiet" != "TRUE" ]];then
+        echo -e "\033[35m[WARNING]\033[0m --> $info" >&2
+    fi
+}
+
+check_files_executable(){
+    local num_related_file=1
+    local related_file=""
+    for related_file in  "$@"
+    do
+        if [[ ! -x "$related_file" ]]; then
+            echo -e "\033[31m\033[7m[ERROR]\033[0m --> NOT EXECUTABLE: $related_file " >&2
+            let num_related_file++
+        fi
+    done
+    [ "$num_related_file" -ne 1 ] && exit 1
+}
+
+check_files_exists(){
+    local num_related_file=1
+    local related_file=""
+    for related_file in  "$@"
+    do
+        if [[ ! -s "$related_file" ]]; then
+            echo -e "\033[31m\033[7m[ERROR]\033[0m --> No file: $related_file " >&2
+            let num_related_file++
+        fi
+    done
+    [ "$num_related_file" -ne 1 ] && exit 1
+}
+
+check_abs_path() {
+    local var_cc=1
+    local check_file=""
+    for check_file in "$@";do
+        if [[ "${check_file:0:1}" != "/" ]]; then
+            echo -e "\033[31m\033[7m[ERROR]\033[0m --> $check_file was not an ABSOLUTE path." >&2
+            let var_cc++
+        fi
+    done
+    [ "$var_cc" -ne 1 ] && exit 1
+}
+
+check_R_lib() {
+    local num_R_lib=1
+    local tp_R_lib=""
+    Rscript --vanilla --slave -e '
+        argv=as.character(commandArgs(TRUE));
+        if (all(argv %in% rownames(installed.packages()))) {
+            quit(save="no", status=0)
+        } else {
+            quit(save="no", status=1)
+        }
+    ' $*
+    if [ $? -ne 0 ];then echo -e "\033[31m\033[7m[ERROR]\033[0m --> One or more of [ $* ] not installed in R"; exit 1;fi
+}
+
+check_sftw_path(){
+    local num_tp_program=1
+    local tp_program=""
+    for tp_program in "$@"
+    do
+        if ! which $tp_program >/dev/null 2>&1 ; then
+            echo -e "\033[31m\033[7m[ERROR]\033[0m --> Program not in PATH: $tp_program " >&2
+            let num_tp_program++
+        fi
+    done
+    [ "$num_tp_program" -ne 1 ] && exit 1
+}
+
+check_var_empty () {
+    local var_cc=1
+    local var_name=""
+    local var=""
+    for var_name in "$@"; do
+        var=$(eval echo "$"$var_name)
+        case ${var} in
+            '')
+                echo -e "\033[31m\033[7m[ERROR]\033[0m --> $var_name is empty: '$var' " >&2
+                let var_cc++ ;;
+            *) ;;
+        esac >&2
+    done
+    [ "$var_cc" -ne 1 ] && exit 1
+}
+
+check_var_numeric () {
+    local var_cc=1
+    local var_name=""
+    local var=""
+    for var_name in "$@"; do
+        var=$(eval echo "$"$var_name)
+        # add ${var#prefix} substitution to trim sign
+        case ${var#[-+]} in
+            '')
+                echo -e "\033[31m\033[7m[ERROR]\033[0m --> $var_name is empty: '$var' " >&2
+                let var_cc++ ;;
+            *.*.*)
+                echo -e "\033[31m\033[7m[ERROR]\033[0m --> $var_name has more than one decimal point: '$var' " >&2
+                let var_cc++ ;;
+            *[!0-9.]*)
+                echo -e "\033[31m\033[7m[ERROR]\033[0m --> $var_name has a non-digit somewhere in it: '$var' " >&2
+                let var_cc++ ;;
+            *) ;;
+        esac >&2
+    done
+    [ "$var_cc" -ne 1 ] && exit 1
+}
+
+check_suffix () {
+    check_suffix_file=$( basename $1 )
+    check_suffix=$2
+    # add x incase file has no suffix
+    if [[ "${check_suffix_file##*.}"x != "$check_suffix"x ]];then
+        echo "[ERROR] --> $check_suffix_file should have suffix: '$check_suffix'." >&2
+        exit 1
+    fi
+}
+
+export -f check_R_lib gst_log gst_rcd gst_warn gst_err check_files_executable check_var_empty check_var_numeric check_sftw_path check_suffix check_files_exists check_abs_path
+# <<<<<<<<<<<<<<<<<<<<<<<< Common functions <<<<<<<<<<<<<<<<<<<<<<<<
+
+usage=$(
+cat <<EOF
+------------------------------------------------------------
+Blast to GO pipelines for ZEAMAP DB
+------------------------------------------------------------
+Dependence:
+[diamond](https://github.com/bbuchfink/diamond)
+[csvtk](https://github.com/shenwei356/csvtk)
+------------------------------------------------------------
+USAGE:
+    bash $(basename $0) [OPTIONS]
+
+OPTIONS: ([R]:required  [O]:optional)
+    -h, --help                          show help and exit.
+    -t, --threads       <num>   [O]     set threads (default: 2)
+    # I/O
+    -i, --input         <file>  [R]     input protein file in fasta format.
+    -d, --db            <file>  [O]     input path to NCBI NR database in dmnd format,
+                                        default: parse the NR_DIAMOND_DB env.
+    -m, --idmap         <file>  [R]     input nr_to_go idmap file (can be downloaded from link below).
+                                        default: parse the SWISSPROT2GO_IDMAP env
+    -o, --output        <str>   [R]     output name, will output results with this prefix,
+                                        default: "zmp_nr2go_out".
+    --blastpfile        <file>  [O]     prebuilt blastp file (with format listed blow),
+                                        if provided, will skip on the fly diamond run.
+    # OPT
+    -e, --evalue        <0-1>   [O]     set evalue threshold (default: 1e-5)
+    --quiet                             keep quiet, only output fatal errors
+    --verbose                           be verbose, output detailed logs
+
+NOTE:
+    1. Swissprot idmap file download url:
+    https://ftp.uniprot.org/pub/databases/uniprot/knowledgebase/idmapping/idmapping_selected.tab.gz
+    2. If you provide a prebuilt blastp file, please make sure the file is in format of:
+    NCBI blast --outfmt 6 sseqid slen sstart send qseqid qlen qstart qend
+------------------------------------------------------------
+Author: Songtao Gui
+E-mail: songtaogui@sina.com
+
+EOF
+)
+if [[ $# -eq 0 ]]; then
+    echo "$usage" >&2
+    exit 1
+fi
+
+# >>>>>>>>>>>>>>>>>>>>>>>> Parse Options >>>>>>>>>>>>>>>>>>>>>>>>
+# Set Default Opt
+export threads=2
+export input=""
+export output="zmp_nr2go_out"
+export db=$NR_DIAMOND_DB
+export idmap=$SWISSPROT2GO_IDMAP
+export evalue=1e-5
+export blastpfile=""
+export verbose=FALSE
+export quiet=FALSE
+# parse args
+UNKOWN_ARGS=()
+while [[ $# > 0 ]]; do
+    case "$1" in
+        -h|--help)
+            echo "$usage" >&2
+            exit 1
+        ;;
+        -t|--threads)
+            threads=$2
+            shift 2
+        ;;
+        -i|--input)
+            input=$2
+            shift 2
+        ;;
+        -d|--db)
+            db=$2
+            shift 2
+        ;;
+        -m|--idmap)
+            idmap=$2
+            shift 2
+        ;;
+        -o|--output)
+            output=$2
+            shift 2
+        ;;
+        -e|--evalue)
+            evalue=$2
+            shift 2
+        ;;
+        --blastpfile)
+            blastpfile=$2
+            shift 2
+        ;;
+        --quiet)
+            quiet=TRUE
+            shift 1
+        ;;
+        --verbose)
+            verbose=TRUE
+            shift 1
+        ;;
+        *) # unknown flag/switch
+            UNKOWN_ARGS+=("$1")
+            shift
+        ;;
+    esac
+done
+if [ "${#UNKOWN_ARGS[@]}" -gt 0 ];then
+    echo "[ERROR] --> Wrong options: \"${UNKOWN_ARGS[@]}\"" >&2
+    exit 1
+fi
+unset UNKOWN_ARGS # restore UNKOWN_ARGS params
+
+# <<<<<<<<<<<<<<<<<<<<<<<< Parse Options <<<<<<<<<<<<<<<<<<<<<<<<
+
+check_files_exists $input
+check_var_numeric threads
+check_var_empty output evalue
+check_sftw_path diamond csvtk
+
+if [[ ! -s "$db" ]];then
+    gst_err "cannot find diamond database: $db, should be provided either through -d or the NR_DIAMOND_DB env."
+    exit 1
+fi
+
+if [[ ! -s "$idmap" ]];then
+    gst_err "cannot find Swissprot2GO idmap file: $idmap, should be provided either through -m or the SWISSPROT2GO_IDMAP env."
+    exit 1
+fi
+
+if [[ -s "$blastpfile" ]];then
+    gst_rcd "Copying prebuilt blastp file: $blastpfile to $output.blast ."
+    cp $blastpfile $output.blast
+    if [ $? -ne 0 ];then gst_err "cp blastp failed: Non-zero exit"; rm -f $outpt.blast; exit 1;fi
+fi
+
+# usage: $0 pr.fa nr.dmnd idmap.tab.gz outpre evalue cpu
+func_anno_blast2go () {
+    local pr=$1
+    local db=$2
+    local idmap=$3
+    local out=$4
+    local b2g_E=$5
+    local cpu=$6
+    local blast=${out}.blast
+    gst_rcd "Annotate: blast2go "
+    if [ ! -s "${out}.b2g_done" ];then
+        gst_rcd "blast to nr ..."
+        gst_rcd "run CMD:\ndiamond blastp --threads $cpu -q $pr --db $db -o $blast -e $b2g_E -k 1 --unal 0 -f 6 sseqid slen sstart send qseqid qlen qstart qend"
+        if [ ! -s "$blast" ];then
+            diamond blastp --threads $cpu -q $pr --db $db -o $blast -e $b2g_E -k 1 --unal 0 -f 6 sseqid slen sstart send qseqid qlen qstart qend 1>${out}.dmnd.log 2>&1
+            if [ $? -ne 0 ];then gst_err "blast2go failed: Non-zero exit; check ${out}.dmnd.log for details";rm -f $blast; exit 1;fi
+        else
+            gst_warn "using existing blast2go output, skip"
+        fi
+        check_files_exists ${out}.blast
+        gst_rcd "parse ncbi access "
+        csvtk cut -tTH -j $cpu -f 5,1 ${out}.blast | csvtk add-header -j $cpu -tTH -n TranscriptID,NCBINRBH -o ${out}.NCBI
+        gst_rcd "id mapping "
+        csvtk cut -j $cpu -tTH -f 1 $blast | csvtk uniq -tTH -j $cpu -f 1 -o ${out}.id.tmp &&\
+        csvtk grep -tTH -j $cpu -f 4 -P ${out}.id.tmp $idmap | csvtk cut -tTH -j $cpu -f 4,7 -o ${out}.id2g.tmp &&\
+        csvtk join -tTH -j $cpu -f 1 <(csvtk cut -tTH -j $cpu -f 1,5 $blast) ${out}.id2g.tmp |\
+        csvtk cut -tTH -j $cpu -f 2,3 -o ${out}.go_annotation.tmp
+        if [ $? -ne 0 ];then gst_err "go annote for $pre failed: Non-zero exit"; exit 1;fi
+        rm -f ${out}.id.tmp ${out}.id2g.tmp
+        check_files_exists ${out}.go_annotation.tmp
+        cat ${out}.go_annotation.tmp | perl -F"\t" -lane '
+            BEGIN{$,="\t";$e="B";}
+            @g=split(/; /, $F[1]);
+            foreach $g(@g){
+                print $F[0],$g,$e;
+            }' | csvtk collapse -tTH -j $cpu -f 1 -s ";" -v 2 -o ${out}.B2G.GO &&\
+        rm -f ${out}.go_annotation.tmp
+        check_files_exists ${out}.B2G.GO ${out}.NCBI ${out}.blast
+        echo "done" > ${out}.b2g_done
+    else
+        gst_warn "blast2go output already exists, skip running, remove ${out}.b2g_done to rerun"
+    fi
+}
+export -f func_anno_blast2go
+
+# >>>>>>>>>>>>>>>>>>>>>>>> MAIN >>>>>>>>>>>>>>>>>>>>>>>>
+gst_log "Start ..."
+func_anno_blast2go $input $db $idmap $output $evalue $threads
+if [ $? -ne 0 ];then gst_err "func_anno_blast2go failed: Non-zero exit"; exit 1;fi
+gst_log "Done. Results:
+$(ls -1 ${output}.{blast,NCBI,B2G.GO})"
+# <<<<<<<<<<<<<<<<<<<<<<<< MAIN <<<<<<<<<<<<<<<<<<<<<<<<
