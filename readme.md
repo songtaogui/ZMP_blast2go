@@ -39,9 +39,9 @@ OPTIONS: ([R]:required  [O]:optional)
     -i, --input         <file>  [R]     input protein file in fasta format.
     -d, --db            <file>  [O]     input path to NCBI NR database in dmnd format,
                                         default: parse the NR_DIAMOND_DB env.
-    -m, --idmap         <file>  [R]     input nr_to_go idmap file (can be downloaded from link below).
+    -m, --idmap         <file>  [O]     input nr_to_go idmap file (can be downloaded from link below).
                                         default: parse the SWISSPROT2GO_IDMAP env
-    -o, --output        <str>   [R]     output name, will output results with this prefix,
+    -o, --output        <str>   [O]     output name, will output results with this prefix,
                                         default: "zmp_nr2go_out".
     --blastpfile        <file>  [O]     prebuilt blastp file (with format listed blow),
                                         if provided, will skip on the fly diamond run.
