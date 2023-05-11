@@ -267,20 +267,21 @@ check_var_numeric threads
 check_var_empty output evalue
 check_sftw_path diamond csvtk
 
-if [[ ! -s "$db" ]];then
-    gst_err "cannot find diamond database: $db, should be provided either through -d or the NR_DIAMOND_DB env."
-    exit 1
+if [[ -s "$blastpfile" ]];then
+    gst_rcd "Copying prebuilt blastp file: $blastpfile to $output.blast ."
+    cp $blastpfile $output.blast
+    if [ $? -ne 0 ];then gst_err "cp blastp failed: Non-zero exit"; rm -f $outpt.blast; exit 1;fi
+else
+    if [[ ! -s "$db" ]];then
+        gst_err "cannot find diamond database: $db, should be provided either through -d or the NR_DIAMOND_DB env."
+        exit 1
+    fi
+    check_var_empty input
 fi
 
 if [[ ! -s "$idmap" ]];then
     gst_err "cannot find Swissprot2GO idmap file: $idmap, should be provided either through -m or the SWISSPROT2GO_IDMAP env."
     exit 1
-fi
-
-if [[ -s "$blastpfile" ]];then
-    gst_rcd "Copying prebuilt blastp file: $blastpfile to $output.blast ."
-    cp $blastpfile $output.blast
-    if [ $? -ne 0 ];then gst_err "cp blastp failed: Non-zero exit"; rm -f $outpt.blast; exit 1;fi
 fi
 
 # usage: $0 pr.fa nr.dmnd idmap.tab.gz outpre evalue cpu
@@ -295,9 +296,9 @@ func_anno_blast2go () {
     gst_rcd "Annotate: blast2go "
     if [ ! -s "${out}.b2g_done" ];then
         gst_rcd "blast to nr ..."
-        gst_rcd "run CMD:\ndiamond blastp --threads $cpu -q $pr --db $db -o $blast -e $b2g_E -k 1 --unal 0 -f 6 sseqid slen sstart send qseqid qlen qstart qend"
+        gst_rcd "run CMD:\ndiamond blastp --threads $cpu -q $pr --db $db -o $blast -e $b2g_E -k 25 --unal 0 -f 6 sseqid slen sstart send qseqid qlen qstart qend"
         if [ ! -s "$blast" ];then
-            diamond blastp --threads $cpu -q $pr --db $db -o $blast -e $b2g_E -k 1 --unal 0 -f 6 sseqid slen sstart send qseqid qlen qstart qend 1>${out}.dmnd.log 2>&1
+            diamond blastp --threads $cpu -q $pr --db $db -o $blast -e $b2g_E -k 25 --unal 0 -f 6 sseqid slen sstart send qseqid qlen qstart qend 1>${out}.dmnd.log 2>&1
             if [ $? -ne 0 ];then gst_err "blast2go failed: Non-zero exit; check ${out}.dmnd.log for details";rm -f $blast; exit 1;fi
         else
             gst_warn "using existing blast2go output, skip"
@@ -307,7 +308,15 @@ func_anno_blast2go () {
         csvtk cut -tTH -j $cpu -f 5,1 ${out}.blast | csvtk add-header -j $cpu -tTH -n TranscriptID,NCBINRBH -o ${out}.NCBI
         gst_rcd "id mapping "
         csvtk cut -j $cpu -tTH -f 1 $blast | csvtk uniq -tTH -j $cpu -f 1 -o ${out}.id.tmp &&\
-        csvtk grep -tTH -j $cpu -f 4 -P ${out}.id.tmp $idmap | csvtk cut -tTH -j $cpu -f 4,7 -o ${out}.id2g.tmp &&\
+        # error: the 4th column of the idmap file could be collapse of multi names, split them apart first:
+        # csvtk grep -tTH -j $cpu -f 4 -P ${out}.id.tmp $idmap | csvtk cut -tTH -j $cpu -f 4,7 -o ${out}.id2g.tmp &&\
+        csvtk cut -tTH -j $cpu -f 4,7 $idmap | perl -F"\t" -lane '
+            BEGIN{$,="\t";}
+            @c = split(/; /, $F[0]);
+            foreach $c(@c){
+                print $c,$F[1];
+            }
+        ' | csvtk grep -tTH -j $cpu -f 1 -P ${out}.id.tmp -o ${out}.id2g.tmp &&\
         csvtk join -tTH -j $cpu -f 1 <(csvtk cut -tTH -j $cpu -f 1,5 $blast) ${out}.id2g.tmp |\
         csvtk cut -tTH -j $cpu -f 2,3 -o ${out}.go_annotation.tmp
         if [ $? -ne 0 ];then gst_err "go annote for $pre failed: Non-zero exit"; exit 1;fi
@@ -330,7 +339,7 @@ export -f func_anno_blast2go
 
 # >>>>>>>>>>>>>>>>>>>>>>>> MAIN >>>>>>>>>>>>>>>>>>>>>>>>
 gst_log "Start ..."
-func_anno_blast2go $input $db $idmap $output $evalue $threads
+func_anno_blast2go "$input" "$db" "$idmap" "$output" "$evalue" "$threads"
 if [ $? -ne 0 ];then gst_err "func_anno_blast2go failed: Non-zero exit"; exit 1;fi
 gst_log "Done. Results:
 $(ls -1 ${output}.{blast,NCBI,B2G.GO})"
