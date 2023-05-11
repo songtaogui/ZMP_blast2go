@@ -333,7 +333,9 @@ func_anno_blast2go () {
             @g=split(/; /, $F[1]);
             foreach $g(@g){
                 print $F[0],$g,$e;
-            }' | csvtk collapse -tTH -j $cpu -f 1 -s ";" -v 2 -o ${out}.B2G.GO &&\
+            }' |\
+            csvtk uniq -tTH -j $cpu -f 1,2 |\
+            csvtk collapse -tTH -j $cpu -f 1 -s ";" -v 2 -o ${out}.B2G.GO &&\
         rm -f ${out}.go_annotation.tmp
         check_files_exists ${out}.B2G.GO ${out}.NCBI ${out}.blast
         echo "done" > ${out}.b2g_done
