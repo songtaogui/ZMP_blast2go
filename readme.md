@@ -9,7 +9,7 @@ A blast2GO like annotation pipeline for ZEAMAP.
     - [diamond](https://github.com/bbuchfink/diamond)
     - [csvtk](https://github.com/shenwei356/csvtk)
 
-2. Clone this repos, make the ZMP_blast2go scrip executable, and add to `$PATH`
+2. Clone this repos, make the ZMP_blast2go script executable, and add to `$PATH`
 
     ```bash
     git clone https://github.com/songtaogui/ZMP_blast2go.git
